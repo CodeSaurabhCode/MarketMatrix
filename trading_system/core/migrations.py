@@ -91,6 +91,46 @@ SELECT add_continuous_aggregate_policy('candles_15m',
 CREATE INDEX IF NOT EXISTS ix_signals_active ON signals (symbol, created_at DESC) WHERE outcome = 'ACTIVE';
 CREATE INDEX IF NOT EXISTS ix_fvg_open ON fair_value_gaps (symbol, timeframe) WHERE status = 'OPEN';
 CREATE INDEX IF NOT EXISTS ix_liq_active ON liquidity_zones (symbol, zone_type) WHERE swept = false;
+
+-- Institutional SMC enrichment columns
+ALTER TABLE fair_value_gaps ADD COLUMN IF NOT EXISTS first_retest_time TIMESTAMP;
+ALTER TABLE fair_value_gaps ADD COLUMN IF NOT EXISTS fill_percent DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE fair_value_gaps ADD COLUMN IF NOT EXISTS displacement_score DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE fair_value_gaps ADD COLUMN IF NOT EXISTS trend_alignment_score DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE fair_value_gaps ADD COLUMN IF NOT EXISTS liquidity_context_score DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE fair_value_gaps ADD COLUMN IF NOT EXISTS structure_context_score DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE fair_value_gaps ADD COLUMN IF NOT EXISTS score_breakdown JSONB;
+
+ALTER TABLE liquidity_zones ADD COLUMN IF NOT EXISTS liquidity_type VARCHAR(30);
+ALTER TABLE liquidity_zones ADD COLUMN IF NOT EXISTS pool_id VARCHAR(120);
+ALTER TABLE liquidity_zones ADD COLUMN IF NOT EXISTS upper_bound DOUBLE PRECISION;
+ALTER TABLE liquidity_zones ADD COLUMN IF NOT EXISTS lower_bound DOUBLE PRECISION;
+ALTER TABLE liquidity_zones ADD COLUMN IF NOT EXISTS age_candles INTEGER DEFAULT 0;
+ALTER TABLE liquidity_zones ADD COLUMN IF NOT EXISTS strength_score DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE liquidity_zones ADD COLUMN IF NOT EXISTS source_indices JSONB;
+ALTER TABLE liquidity_zones ADD COLUMN IF NOT EXISTS metadata_json JSONB;
+
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS market_structure_score DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS volume_confirmation_score DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS explainability JSONB;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS planned_rr DOUBLE PRECISION;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS mfe DOUBLE PRECISION;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS mae DOUBLE PRECISION;
+
+ALTER TABLE market_structure ADD COLUMN IF NOT EXISTS scope VARCHAR(20) DEFAULT 'EXTERNAL';
+ALTER TABLE market_structure ADD COLUMN IF NOT EXISTS direction VARCHAR(10);
+ALTER TABLE market_structure ADD COLUMN IF NOT EXISTS broken_level DOUBLE PRECISION;
+ALTER TABLE market_structure ADD COLUMN IF NOT EXISTS break_price DOUBLE PRECISION;
+ALTER TABLE market_structure ADD COLUMN IF NOT EXISTS protected_high DOUBLE PRECISION;
+ALTER TABLE market_structure ADD COLUMN IF NOT EXISTS protected_low DOUBLE PRECISION;
+ALTER TABLE market_structure ADD COLUMN IF NOT EXISTS displacement_score DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE market_structure ADD COLUMN IF NOT EXISTS strength_score DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE market_structure ADD COLUMN IF NOT EXISTS source_index INTEGER;
+ALTER TABLE market_structure ADD COLUMN IF NOT EXISTS broken_index INTEGER;
+ALTER TABLE market_structure ADD COLUMN IF NOT EXISTS metadata_json JSONB;
+
+CREATE INDEX IF NOT EXISTS ix_liq_pool_id ON liquidity_zones (pool_id);
+CREATE INDEX IF NOT EXISTS ix_ms_symbol_scope_ts ON market_structure (symbol, timeframe, scope, timestamp DESC);
 """
 
 

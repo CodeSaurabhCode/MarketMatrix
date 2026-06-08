@@ -97,10 +97,17 @@ class FairValueGap(Base):
     gap_size_percent = Column(Float, nullable=False)
     
     formation_time = Column(DateTime, nullable=False)
+    first_retest_time = Column(DateTime)
     fill_time = Column(DateTime)
+    fill_percent = Column(Float, default=0)
     
     volume_at_formation = Column(BigInteger)
     quality_score = Column(Float)  # 0-100
+    displacement_score = Column(Float, default=0)
+    trend_alignment_score = Column(Float, default=0)
+    liquidity_context_score = Column(Float, default=0)
+    structure_context_score = Column(Float, default=0)
+    score_breakdown = Column(JSON)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     
@@ -118,9 +125,17 @@ class LiquidityZone(Base):
     symbol = Column(String(50), nullable=False, index=True)
     timeframe = Column(String(5), nullable=False)
     zone_type = Column(String(20), nullable=False)  # BUY_SIDE / SELL_SIDE
+    liquidity_type = Column(String(30))
+    pool_id = Column(String(120), index=True)
     
     price_level = Column(Float, nullable=False)
+    upper_bound = Column(Float)
+    lower_bound = Column(Float)
     touch_count = Column(Integer, default=1)
+    age_candles = Column(Integer, default=0)
+    strength_score = Column(Float, default=0)
+    source_indices = Column(JSON)
+    metadata_json = Column(JSON)
     
     swept = Column(Boolean, default=False)
     sweep_time = Column(DateTime)
@@ -200,14 +215,17 @@ class Signal(Base):
     confidence_score = Column(Float, nullable=False)
     
     # Component scores
+    market_structure_score = Column(Float, default=0)
     liquidity_sweep_score = Column(Float, default=0)
     fvg_score = Column(Float, default=0)
     vwap_score = Column(Float, default=0)
     volume_profile_score = Column(Float, default=0)
     order_flow_score = Column(Float, default=0)
+    volume_confirmation_score = Column(Float, default=0)
     
     # Context
     reasoning = Column(Text)
+    explainability = Column(JSON)
     timeframe = Column(String(5))
     
     # Status tracking
@@ -217,6 +235,9 @@ class Signal(Base):
     # Outcome (for backtesting)
     outcome = Column(String(20))  # WIN / LOSS / BREAKEVEN / ACTIVE
     outcome_rr = Column(Float)  # Achieved R:R ratio
+    planned_rr = Column(Float)
+    mfe = Column(Float)  # Maximum favorable excursion in R
+    mae = Column(Float)  # Maximum adverse excursion in R
     exit_price = Column(Float)
     exit_time = Column(DateTime)
     
@@ -238,10 +259,21 @@ class MarketStructure(Base):
     timeframe = Column(String(5), nullable=False)
     
     structure_type = Column(String(20), nullable=False)  # HH, HL, LH, LL, BOS, CHOCH
+    scope = Column(String(20), default="EXTERNAL")
+    direction = Column(String(10))
     price = Column(Float, nullable=False)
     timestamp = Column(DateTime, nullable=False)
     
     trend = Column(String(10))  # BULLISH / BEARISH / RANGING
+    broken_level = Column(Float)
+    break_price = Column(Float)
+    protected_high = Column(Float)
+    protected_low = Column(Float)
+    displacement_score = Column(Float, default=0)
+    strength_score = Column(Float, default=0)
+    source_index = Column(Integer)
+    broken_index = Column(Integer)
+    metadata_json = Column(JSON)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     

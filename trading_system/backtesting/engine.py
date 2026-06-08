@@ -36,6 +36,10 @@ class BacktestResult:
         self.losses = 0
         self.breakevens = 0
         self.total_rr = 0.0
+        self.gross_profit_r = 0.0
+        self.gross_loss_r = 0.0
+        self.total_mfe = 0.0
+        self.total_mae = 0.0
         self.max_drawdown = 0.0
         self.win_streak = 0
         self.loss_streak = 0
@@ -59,6 +63,45 @@ class BacktestResult:
         avg_win = self.avg_rr
         avg_loss = 1.0  # Always risking 1R
         return (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
+
+    @property
+    def profit_factor(self) -> float:
+        if self.gross_loss_r == 0:
+            return float("inf") if self.gross_profit_r > 0 else 0
+        return self.gross_profit_r / self.gross_loss_r
+
+    @property
+    def avg_mfe(self) -> float:
+        return self.total_mfe / self.total_signals if self.total_signals else 0
+
+    @property
+    def avg_mae(self) -> float:
+        return self.total_mae / self.total_signals if self.total_signals else 0
+
+    @property
+    def setup_performance(self) -> dict:
+        grouped: dict[str, dict] = {}
+        for signal in self.signals:
+            setup = signal.get("setup_type", "SMC_CONFLUENCE")
+            item = grouped.setdefault(
+                setup,
+                {"count": 0, "wins": 0, "losses": 0, "rr": 0.0, "mfe": 0.0, "mae": 0.0},
+            )
+            item["count"] += 1
+            item["wins"] += 1 if signal.get("outcome") == "WIN" else 0
+            item["losses"] += 1 if signal.get("outcome") == "LOSS" else 0
+            item["rr"] += signal.get("rr", 0)
+            item["mfe"] += signal.get("mfe", 0)
+            item["mae"] += signal.get("mae", 0)
+
+        for item in grouped.values():
+            count = item["count"]
+            closed = item["wins"] + item["losses"]
+            item["win_rate"] = round(item["wins"] / closed * 100, 1) if closed else 0
+            item["avg_rr"] = round(item["rr"] / count, 2) if count else 0
+            item["avg_mfe"] = round(item["mfe"] / count, 2) if count else 0
+            item["avg_mae"] = round(item["mae"] / count, 2) if count else 0
+        return grouped
     
     def summary(self) -> dict:
         return {
@@ -68,8 +111,12 @@ class BacktestResult:
             "breakevens": self.breakevens,
             "win_rate": round(self.win_rate, 1),
             "avg_rr": round(self.avg_rr, 2),
+            "profit_factor": "inf" if self.profit_factor == float("inf") else round(self.profit_factor, 2),
             "expectancy": round(self.expectancy, 3),
+            "avg_mfe": round(self.avg_mfe, 2),
+            "avg_mae": round(self.avg_mae, 2),
             "max_drawdown": round(self.max_drawdown, 2),
+            "setup_performance": self.setup_performance,
         }
 
 
@@ -125,16 +172,22 @@ class BacktestEngine:
             # Check active signals for exit
             still_active = []
             for sig in active_signals:
+                self._update_signal_excursions(sig, latest)
                 outcome = self._check_signal_exit(sig, latest)
                 if outcome:
                     result.total_signals += 1
                     if outcome["result"] == "WIN":
                         result.wins += 1
                         result.total_rr += outcome["rr"]
+                        result.gross_profit_r += max(outcome["rr"], 0)
                     elif outcome["result"] == "LOSS":
                         result.losses += 1
+                        result.gross_loss_r += abs(outcome.get("rr", -1.0))
                     else:
                         result.breakevens += 1
+
+                    result.total_mfe += sig.get("mfe", 0)
+                    result.total_mae += sig.get("mae", 0)
                     
                     result.signals.append({
                         **sig,
@@ -142,6 +195,8 @@ class BacktestEngine:
                         "rr": outcome.get("rr", 0),
                         "exit_price": outcome["exit_price"],
                         "exit_time": latest.timestamp,
+                        "mfe": round(sig.get("mfe", 0), 2),
+                        "mae": round(sig.get("mae", 0), 2),
                     })
                 else:
                     still_active.append(sig)
@@ -161,6 +216,10 @@ class BacktestEngine:
                         "target_2": signal.target_2,
                         "confidence": signal.confidence_score,
                         "entry_time": latest.timestamp,
+                        "planned_rr": self._planned_rr(signal.direction, signal),
+                        "mfe": 0.0,
+                        "mae": 0.0,
+                        "setup_type": "SMC_CONFLUENCE",
                     })
         
         # Calculate max drawdown
@@ -180,13 +239,12 @@ class BacktestEngine:
         ms = self._market_structure.get_latest_structure(symbol, timeframe)
         
         # Liquidity sweep
-        buy_zones, sell_zones = self._liquidity.detect_equal_levels(candles)
-        all_zones = buy_zones + sell_zones
-        sweeps = self._liquidity.detect_sweep(candles, all_zones)
+        pools = self._liquidity.detect_pools(candles, min_touches=2)
+        sweeps = self._liquidity.detect_sweep(candles, pools)
         sweep = sweeps[0] if sweeps else None
         
         # FVG
-        self._fvg.detect_fvg(candles)
+        self._fvg.detect_fvg(candles, market_structure=ms, liquidity_context=sweep)
         nearest_fvg = self._fvg.get_nearest_fvg(symbol, latest.close)
         
         # Volume profile
@@ -219,6 +277,22 @@ class BacktestEngine:
         )
         
         return self._aggregator.evaluate(context)
+
+    def _update_signal_excursions(self, signal: dict, candle: CandleData):
+        entry = signal["entry_price"]
+        risk = self._risk(signal)
+        if risk <= 0:
+            return
+
+        if signal["direction"] == "LONG":
+            favorable = max(candle.high - entry, 0)
+            adverse = max(entry - candle.low, 0)
+        else:
+            favorable = max(entry - candle.low, 0)
+            adverse = max(candle.high - entry, 0)
+
+        signal["mfe"] = max(signal.get("mfe", 0), favorable / risk)
+        signal["mae"] = max(signal.get("mae", 0), adverse / risk)
     
     def _check_signal_exit(self, signal: dict, candle: CandleData) -> Optional[dict]:
         """Check if signal hit SL or target."""
@@ -265,6 +339,21 @@ class BacktestEngine:
                 }
         
         return None
+
+    def _risk(self, signal: dict) -> float:
+        if signal["direction"] == "LONG":
+            return signal["entry_price"] - signal["stop_loss"]
+        return signal["stop_loss"] - signal["entry_price"]
+
+    def _planned_rr(self, direction: Direction, signal) -> float:
+        entry = (signal.entry_zone_low + signal.entry_zone_high) / 2
+        if direction == Direction.LONG:
+            risk = entry - signal.stop_loss
+            reward = signal.target_1 - entry
+        else:
+            risk = signal.stop_loss - entry
+            reward = entry - signal.target_1
+        return round(reward / risk, 2) if risk > 0 else 0
     
     def _get_prev_day_candles(
         self, candles: list[CandleData], current: CandleData

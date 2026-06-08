@@ -18,7 +18,7 @@ from trading_system.core.schemas import TickData, CandleData
 logger = logging.getLogger(__name__)
 
 
-class   AngelOneClient:
+class AngelOneClient:
     """Manages Angel One SmartAPI connection and data retrieval."""
     
     def __init__(self):
@@ -28,6 +28,7 @@ class   AngelOneClient:
         self._feed_token: Optional[str] = None
         self._refresh_token: Optional[str] = None
         self._tick_callback: Optional[Callable[[TickData], Awaitable[None]]] = None
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
         self._connected = False
     
     async def authenticate(self) -> bool:
@@ -51,7 +52,7 @@ class   AngelOneClient:
                     self._auth_token = data["data"]["jwtToken"]
                     self._refresh_token = data["data"]["refreshToken"]
                     self._feed_token = self._smart_api.getfeedToken()
-                    logger.info("✓ Angel One authentication successful")
+                    logger.info("[AUTH OK] Angel One authentication successful")
                     return True
                 else:
                     msg = data.get('message', 'Unknown error')
@@ -198,6 +199,7 @@ class   AngelOneClient:
         self,
         tokens: list[dict],
         on_tick: Callable[[TickData], Awaitable[None]],
+        event_loop: asyncio.AbstractEventLoop,
     ):
         """
         Start WebSocket connection for real-time ticks.
@@ -205,8 +207,10 @@ class   AngelOneClient:
         Args:
             tokens: List of {"exchange": "NSE", "token": "2885"} dicts
             on_tick: Async callback for each tick
+            event_loop: The running event loop for async callbacks
         """
         self._tick_callback = on_tick
+        self._event_loop = event_loop
         
         # Build token list for WebSocket subscription
         # Format: exchange_type|token
@@ -277,13 +281,9 @@ class   AngelOneClient:
                 ask_qty=int(message.get("best_5_sell_data", [{}])[0].get("quantity", 0)) if message.get("best_5_sell_data") else None,
             )
             
-            if self._tick_callback:
-                # Schedule async callback
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.ensure_future(self._tick_callback(tick))
-                else:
-                    loop.run_until_complete(self._tick_callback(tick))
+            if self._tick_callback and self._event_loop:
+                # Schedule async callback from WebSocket thread using thread-safe method
+                asyncio.run_coroutine_threadsafe(self._tick_callback(tick), self._event_loop)
                     
         except Exception as e:
             logger.error(f"Tick parse error: {e}")

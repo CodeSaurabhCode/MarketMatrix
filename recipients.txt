@@ -1,0 +1,5 @@
+# Email recipients for trading signals
+# Add one email address per line
+# Lines starting with # are ignored
+
+itssk1005@gmail.com

@@ -32,7 +32,7 @@ from trading_system.engines.volume_profile import VolumeProfileEngine
 from trading_system.engines.order_flow import OrderFlowProxyEngine
 from trading_system.engines.market_structure import MarketStructureEngine
 from trading_system.engines.signal_aggregator import SignalAggregator
-from trading_system.notifications.telegram import TelegramNotifier
+from trading_system.notifications.email import EmailNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class TradingOrchestrator:
         # Data components
         self._client = AngelOneClient()
         self._aggregator = CandleAggregator(timeframes=settings.app.timeframes)
-        self._notifier = TelegramNotifier()
+        self._notifier = EmailNotifier()
         
         # Detection engines
         self._liquidity = LiquiditySweepDetector()
@@ -112,7 +112,7 @@ class TradingOrchestrator:
             logger.error("=" * 80)
             return
         
-        logger.info(f"✓ Loaded {len(focused_symbols)} focused symbols:")
+        logger.info(f"[SYMBOLS OK] Loaded {len(focused_symbols)} focused symbols:")
         for sym in focused_symbols:
             logger.info(f"  - {sym['symbol']} ({sym['type']})")
         
@@ -172,10 +172,14 @@ class TradingOrchestrator:
             self._client.start_websocket,
             tokens,
             self._on_tick,
+            loop,
         )
     
     async def _on_tick(self, tick: TickData):
         """Handle incoming tick."""
+        # Note: Tick logging suppressed to reduce verbosity (1000s per second)
+        # Uncomment to debug: logger.debug(f"[TICK] {tick.symbol} @ ₹{tick.ltp}")
+        
         # Update cache
         await cache.set_ltp(tick.symbol, tick.ltp)
         
@@ -189,6 +193,7 @@ class TradingOrchestrator:
         """Handle completed candle - trigger analysis."""
         symbol = candle.symbol
         timeframe = candle.timeframe
+        logger.info(f"[CANDLE] {symbol} {timeframe}m: O={candle.open:.2f} H={candle.high:.2f} L={candle.low:.2f} C={candle.close:.2f} V={candle.volume}")
         
         # Add to buffer
         if symbol not in self._candle_buffer:
@@ -214,39 +219,51 @@ class TradingOrchestrator:
         candles = self._candle_buffer.get(symbol, {}).get(timeframe, [])
         
         if len(candles) < settings.signal.lookback_periods:
+            logger.debug(f"[ANALYSIS SKIP] {symbol} {timeframe}m: Not enough candles ({len(candles)}/{settings.signal.lookback_periods})")
             return
         
+        logger.info(f"[ANALYSIS START] {symbol} {timeframe}m (candles={len(candles)})")  
         latest = candles[-1]
         
         try:
             # 1. Market Structure
             self._market_structure.analyze(candles, symbol, timeframe)
             ms = self._market_structure.get_latest_structure(symbol, timeframe)
+            logger.debug(f"  [MS] {ms.structure if ms else 'N/A'}")
             
-            # 2. Liquidity Sweep Detection
-            buy_zones, sell_zones = self._liquidity.detect_equal_levels(candles)
-            all_zones = buy_zones + sell_zones
-            sweeps = self._liquidity.detect_sweep(candles, all_zones)
+            # 2. Liquidity Pool and Sweep Detection
+            liquidity_pools = self._liquidity.detect_pools(candles, min_touches=2)
+            sweeps = self._liquidity.detect_sweep(candles, liquidity_pools)
             sweep = sweeps[0] if sweeps else None
+            logger.debug(f"  [LIQUIDITY] Pools={len(liquidity_pools)}, Sweeps={len(sweeps)}, Latest={sweep.direction if sweep else 'None'}")
             
             # 3. FVG Detection
-            new_fvgs = self._fvg.detect_fvg(candles)
+            new_fvgs = self._fvg.detect_fvg(
+                candles,
+                market_structure=ms,
+                liquidity_context=sweep,
+            )
             self._fvg.update_fvgs(candles)
             nearest_fvg = self._fvg.get_nearest_fvg(symbol, latest.close)
+            logger.debug(f"  [FVG] New={len(new_fvgs)}, Nearest={nearest_fvg.gap_size if nearest_fvg else 'None'}")
             
             # 4. Volume Profile
             profile = self._volume_profile.calculate_profile(candles[-100:], symbol, timeframe)
+            logger.debug(f"  [VOLUME] POC={profile.poc if profile else 'N/A'}")
             
             # 5. Anchored VWAP
             prev_day_candles = self._get_prev_day_candles(symbol, timeframe)
             vwaps = self._vwap.calculate_all_anchors(candles[-50:], prev_day_candles, symbol)
             vwap_signals = self._vwap.detect_vwap_signals(candles[-10:], vwaps)
+            logger.debug(f"  [VWAP] Signals={len(vwap_signals)}")
             
             # 6. Order Flow
             of_snapshot = self._order_flow.calculate_snapshot(symbol, candles)
+            logger.debug(f"  [ORDER_FLOW] Delta={of_snapshot.cumulative_delta if of_snapshot else 'N/A'}")
             
             # 7. ATR
             atr = self._signal_agg.calculate_atr(candles)
+            logger.debug(f"  [ATR] {atr:.2f}")
             
             # Build signal context
             context = SignalContext(
@@ -265,6 +282,7 @@ class TradingOrchestrator:
             
             # Evaluate signal
             signal = self._signal_agg.evaluate(context)
+            logger.debug(f"[SIGNAL EVAL] Generated={signal is not None}")
             
             if signal:
                 await self._process_signal(signal)
@@ -328,12 +346,15 @@ class TradingOrchestrator:
                 target_1=signal.target_1,
                 target_2=signal.target_2,
                 confidence_score=signal.confidence_score,
+                market_structure_score=signal.market_structure_score,
                 liquidity_sweep_score=signal.liquidity_sweep_score,
                 fvg_score=signal.fvg_score,
                 vwap_score=signal.vwap_score,
                 volume_profile_score=signal.volume_profile_score,
                 order_flow_score=signal.order_flow_score,
+                volume_confirmation_score=signal.volume_confirmation_score,
                 reasoning=signal.reasoning,
+                explainability=signal.explainability,
                 timeframe=signal.timeframe,
                 outcome="ACTIVE",
             )

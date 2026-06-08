@@ -64,6 +64,14 @@ class TelegramSettings(BaseSettings):
     model_config = {"env_prefix": "TELEGRAM_"}
 
 
+class EmailSettings(BaseSettings):
+    email: str = ""
+    app_pass_key: str = ""
+    enabled: bool = True
+    
+    model_config = {"env_prefix": ""}
+
+
 class SignalSettings(BaseSettings):
     min_confidence_score: float = 80.0
     lookback_periods: int = 50
@@ -106,6 +114,7 @@ class Settings:
         self.redis = RedisSettings()
         self.angel = AngelOneSettings()
         self.telegram = TelegramSettings()
+        self.email = EmailSettings()
         self.signal = SignalSettings()
         self.app = AppSettings()
 

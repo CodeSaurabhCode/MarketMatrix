@@ -64,7 +64,7 @@ class CacheManager:
                 socket_connect_timeout=5,
             )
             await self._redis.ping()
-            logger.info("✓ Redis connected successfully")
+            logger.info("[REDIS OK] Redis connected successfully")
         except Exception as e:
             logger.warning(f"[WARNING] Redis connection failed: {e}")
             logger.info("Using in-memory cache fallback instead")
